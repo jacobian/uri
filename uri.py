@@ -30,6 +30,7 @@ You can also use keyword arguments for a more pythonic style::
 
 import re
 import urllib
+import itertools
 
 __all__ = ["expand_template", "TemplateSyntaxError"]
 
@@ -37,25 +38,98 @@ class TemplateSyntaxError(Exception):
     pass
 
 _template_pattern = re.compile(r"{([^}]+)}")
+_varname_pattern = re.compile(r"^[A-Za-z0-9]\w*$")
 
 def expand_template(template, values={}, **kwargs):
-    """Expand a URI template."""
-    values = values.copy()
-    values.update(kwargs)
-    values = percent_encode(values)
-    return _template_pattern.sub(lambda m: _handle_match(m, values), template)
+    """
+    Expand a URI template::
+    
+        >>> expand_template("http://{host}/{-listjoin|/|path}", 
+        ...                 host="example.com", path=["a", "b"])
+        'http://example.com/a/b'
+    """
+    allargs = itertools.chain(values.iteritems(), kwargs.iteritems())
+    return Template(template).expand(**dict(allargs))
 
-def _handle_match(match, values):
-    op, arg, variables = parse_expansion(match.group(1))
-    if op:
-        try:
-            return getattr(_operators, op)(variables, arg, values)
-        except AttributeError:
-            raise TemplateSyntaxError("Unexpected operator: %r" % op)
-    else:
-        assert len(variables) == 1
-        key, default = variables.items()[0]
-        return values.get(key, default)
+class Template(object):
+    """
+    Deal with a URI template as a class::
+    
+        >>> t = Template("http://example.com/{p}?{-join|&|a,b,c}")
+        >>> t.expand(p="foo", a="1")
+        'http://example.com/foo?a=1'
+        >>> t.expand(p="bar", b="2", c="3")
+        'http://example.com/bar?c=3&b=2'
+        
+    """
+    
+    def __init__(self, template):
+        self.template = template
+        
+    def expand(self, **values):
+        """Expand a URI template."""
+        values = percent_encode(values)
+        return _template_pattern.sub(lambda m: self._handle_match(m, values), self.template)
+
+    def _handle_match(self, match, values):
+        """re.sub callback used by expand()"""
+        op, arg, variables = parse_expansion(match.group(1))
+        if op:
+            try:
+                return getattr(self, "operator_" + op)(variables, arg, values)
+            except AttributeError:
+                raise TemplateSyntaxError("Unexpected operator: %r" % op)
+        else:
+            assert len(variables) == 1
+            key, default = variables.items()[0]
+            return values.get(key, default)
+                
+    #
+    # Operators; see Section 3.3.
+    #
+
+    def operator_opt(self, variables, arg, values):
+        for k in variables.keys():
+            v = values.get(k, None)
+            if v is None or (hasattr(v, "__iter__") and len(v) == 0):
+                continue
+            else:
+                return arg
+        return ""
+
+    def operator_neg(self, variables, arg, values):
+        if self.operator_opt(variables, arg, values):
+            return ""
+        else:
+            return arg
+
+    def operator_listjoin(self, variables, arg, values):
+        k = variables.keys()[0]
+        return arg.join(values.get(k, []))
+
+    def operator_join(self, variables, arg, values):
+        return arg.join([
+            "%s=%s" % (k, values.get(k, default))
+            for k, default in variables.items()
+            if values.get(k, default) is not None
+        ])
+
+    def operator_prefix(self, variables, arg, values):
+        k, default = variables.items()[0]
+        v = values.get(k, default)
+        if v is not None and len(v) > 0:
+            return arg + v
+        else:
+            return ""
+
+    def operator_append(self, variables, arg, values):
+        k, default = variables.items()[0]
+        v = values.get(k, default)
+        if v is not None and len(v) > 0:
+            return v + arg
+        else:
+            return ""
+    
 
 #
 # Parse an expansion
@@ -63,21 +137,19 @@ def _handle_match(match, values):
 # to make it pass all the tests.
 #
 
-_varname_pattern = re.compile(r"^[A-Za-z0-9]\w*$")
-
 def parse_expansion(expansion):
     """
     Parse an expansion -- the part inside {curlybraces} -- into its component
     parts. Returns a tuple of (operator, argument, variabledict). 
-    
+
     For example::
-    
+
         >>> parse_expansion("-join|&|a,b,c=1")
         ('join', '&', {'a': None, 'c': '1', 'b': None})
-        
+    
         >>> parse_expansion("c=1")
         (None, None, {'c': '1'})
-        
+    
     """
     if "|" in expansion:
         (op, arg, vars_) = expansion.split("|")
@@ -95,11 +167,11 @@ def parse_expansion(expansion):
                 raise TemplateSyntaxError("Invalid variable: %r" % var)
         else:
             (varname, vardefault) = (var, None)
-        
+    
         if not _varname_pattern.match(varname):
             raise TemplateSyntaxError("Invalid variable: %r" % varname)
         variables[varname] = vardefault
-        
+    
     return (op, arg, variables)
 
 #
@@ -113,61 +185,6 @@ def percent_encode(values):
         else:
             rv[k] = urllib.quote(v)
     return rv
-
-#
-# Operators; see Section 3.3.
-# Shoved into a class just so we have an ad hoc namespace.
-#
-
-class _operators(object):
-    
-    @staticmethod
-    def opt(variables, arg, values):
-        for k in variables.keys():
-            v = values.get(k, None)
-            if v is None or (hasattr(v, "__iter__") and len(v) == 0):
-                continue
-            else:
-                return arg
-        return ""
-
-    @staticmethod
-    def neg(variables, arg, values):
-        if _operators.opt(variables, arg, values):
-            return ""
-        else:
-            return arg
-
-    @staticmethod
-    def listjoin(variables, arg, values):
-        k = variables.keys()[0]
-        return arg.join(values.get(k, []))
-
-    @staticmethod
-    def join(variables, arg, values):
-        return arg.join([
-            "%s=%s" % (k, values.get(k, default))
-            for k, default in variables.items()
-            if values.get(k, default) is not None
-        ])
-
-    @staticmethod
-    def prefix(variables, arg, values):
-        k, default = variables.items()[0]
-        v = values.get(k, default)
-        if v is not None and len(v) > 0:
-            return arg + v
-        else:
-            return ""
-            
-    @staticmethod
-    def append(variables, arg, values):
-        k, default = variables.items()[0]
-        v = values.get(k, default)
-        if v is not None and len(v) > 0:
-            return v + arg
-        else:
-            return ""
 
 #
 # A bunch more tests that don't rightly fit in docstrings elsewhere
