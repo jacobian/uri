@@ -178,6 +178,15 @@ def parse_expansion(expansion):
 # Encode an entire dictionary of values
 #
 def percent_encode(values):
+    """
+    Percent-encode a dictionary of values, handling nested lists correctly::
+    
+        >>> percent_encode({'company': 'AT&T'})
+        {'company': 'AT%26T'}
+        >>> percent_encode({'companies': ['Yahoo!', 'AT&T']})
+        {'companies': ['Yahoo%21', 'AT%26T']}
+        
+    """
     rv = {}
     for k, v in values.items():
         if hasattr(v, "__iter__"):
