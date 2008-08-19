@@ -37,9 +37,9 @@ You can also use keyword arguments for a more pythonic style::
 Contributing
 ============
 
-I use Mercurial; the canonical repository lives at
-http://toys.jacobian.org/hg/uri. Please feel free to send patches or links to
-other branches to <jacob@jacobian.org>
+I use GitHub; the canonical repository lives at
+http://github.com/jacobian/uri/tree. Please feel free to send pull requests or
+patches to <jacob@jacobian.org>
 
 TODO
 ----
